@@ -3,8 +3,10 @@ import os
 import yt_dlp
 import logging
 from telegram import Update, Message, InputMediaPhoto
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 from telegram.error import BadRequest
+from PIL import Image
+import io
 
 logging.basicConfig(level=logging.INFO)
 
@@ -14,6 +16,7 @@ COOKIES_FILE = "twitter_cookies.txt"
 if not TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set.")
 
+# إصلاح ملفات الكوكيز إذا موجودة
 def fix_cookies_file():
     if not os.path.exists(COOKIES_FILE):
         return
@@ -93,13 +96,13 @@ def build_ydl_opts(api_mode=None, for_images=False):
         opts['cookiefile'] = COOKIES_FILE
     return opts
 
-async def safe_reply_text(msg: Message, chat_id: int, bot, text: str):
+def safe_reply_text(msg: Message, chat_id: int, bot, text: str):
     try:
-        await msg.reply_text(text)
+        msg.reply_text(text)
     except BadRequest:
-        await bot.send_message(chat_id=chat_id, text=text)
+        bot.send_message(chat_id=chat_id, text=text)
 
-async def download_media(url):
+def download_media(url):
     has_cookies = os.path.exists(COOKIES_FILE)
     strategies = []
     if has_cookies:
@@ -128,7 +131,7 @@ async def download_media(url):
 
     return [], []
 
-async def process_message(msg: Message, bot):
+def process_message(msg, bot):
     if not msg:
         return
     chat_id = msg.chat_id
@@ -140,45 +143,47 @@ async def process_message(msg: Message, bot):
         return
 
     logging.info(f"Found Twitter URL: {url}")
-    await safe_reply_text(msg, chat_id, bot, "📥 جاري تحميل الميديا...")
+    safe_reply_text(msg, chat_id, bot, "📥 جاري تحميل الميديا...")
 
-    videos, images = await download_media(url)
+    videos, images = download_media(url)
 
     if not videos and not images:
-        await safe_reply_text(msg, chat_id, bot, "⚠️ لم يتم العثور على فيديو أو صورة في هذه التغريدة")
+        safe_reply_text(msg, chat_id, bot, "⚠️ لم يتم العثور على فيديو أو صورة في هذه التغريدة")
         cleanup_media()
         return
 
     try:
         for vf in videos:
             try:
-                await msg.reply_video(video=open(vf, 'rb'))
+                msg.reply_video(video=open(vf, 'rb'))
             except BadRequest:
-                await bot.send_video(chat_id=chat_id, video=open(vf, 'rb'))
+                bot.send_video(chat_id=chat_id, video=open(vf, 'rb'))
 
         if len(images) == 1:
             try:
-                await msg.reply_photo(photo=open(images[0], 'rb'))
+                msg.reply_photo(photo=open(images[0], 'rb'))
             except BadRequest:
-                await bot.send_photo(chat_id=chat_id, photo=open(images[0], 'rb'))
+                bot.send_photo(chat_id=chat_id, photo=open(images[0], 'rb'))
         elif len(images) > 1:
             media_group = [InputMediaPhoto(open(f, 'rb')) for f in images[:10]]
             try:
-                await msg.reply_media_group(media=media_group)
+                msg.reply_media_group(media=media_group)
             except BadRequest:
-                await bot.send_media_group(chat_id=chat_id, media=media_group)
+                bot.send_media_group(chat_id=chat_id, media=media_group)
     except Exception as e:
         logging.error(f"Failed to send media: {e}")
-        await safe_reply_text(msg, chat_id, bot, "❌ فشل إرسال الميديا")
+        safe_reply_text(msg, chat_id, bot, "❌ فشل إرسال الميديا")
     finally:
         cleanup_media()
 
-async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handler(update, context):
     msg = update.message or update.channel_post
-    await process_message(msg, context.bot)
+    process_message(msg, context.bot)
 
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(MessageHandler(filters.ALL, handler))
+updater = Updater(TOKEN, use_context=True)
+dp = updater.dispatcher
+
+dp.add_handler(MessageHandler(Filters.all, handler))
 
 print("BOT WORKING 🔥")
 if os.path.exists(COOKIES_FILE):
@@ -186,4 +191,5 @@ if os.path.exists(COOKIES_FILE):
 else:
     print("⚠️  No cookies file — sensitive tweets may not download")
 
-app.run_polling(allowed_updates=Update.ALL_TYPES)
+updater.start_polling()
+updater.idle()
